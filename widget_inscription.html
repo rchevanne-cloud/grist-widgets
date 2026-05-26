@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Inscription Formation</title>
+  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 14px; }
+
+    #dispositif-banner {
+      background: #1F5C99; color: white;
+      padding: 12px 16px; border-radius: 8px; margin-bottom: 14px;
+    }
+    #dispositif-banner h2 { font-size: 15px; margin-bottom: 3px; }
+    #dispositif-banner p  { font-size: 12px; opacity: .85; }
+
+    .school-selector { margin-bottom: 14px; }
+    .school-selector label { font-weight: bold; font-size: 13px; color: #333; display: block; margin-bottom: 5px; }
+    .school-selector select {
+      width: 100%; padding: 8px 10px; border: 1px solid #ccc;
+      border-radius: 6px; font-size: 13px; background: white;
+    }
+
+    #status-msg {
+      padding: 8px 14px; border-radius: 6px; font-size: 13px;
+      margin-bottom: 12px; display: none;
+    }
+    #status-msg.success { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+    #status-msg.error   { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
+
+    .teacher-list { background: white; border-radius: 8px; border: 1px solid #e0e0e0; overflow: hidden; }
+
+    .list-header {
+      background: #f0f4f8; padding: 9px 14px;
+      font-size: 12px; font-weight: bold; color: #555;
+      border-bottom: 1px solid #e0e0e0;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+
+    .badge {
+      background: #e8f0fe; color: #1F5C99;
+      padding: 2px 8px; border-radius: 12px; font-size: 11px;
+    }
+
+    .btn-all {
+      background: #1F5C99; color: white; border: none;
+      padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 11px;
+    }
+    .btn-all:hover { background: #174a7a; }
+
+    .teacher-item {
+      display: flex; align-items: center;
+      padding: 9px 14px; border-bottom: 1px solid #f0f0f0;
+      transition: background .1s;
+    }
+    .teacher-item:last-child { border-bottom: none; }
+    .teacher-item:hover { background: #f8f9fa; }
+
+    .teacher-item input[type="checkbox"] {
+      width: 17px; height: 17px; margin-right: 11px;
+      cursor: pointer; accent-color: #1F5C99; flex-shrink: 0;
+    }
+
+    .teacher-name  { font-size: 13px; color: #222; }
+    .teacher-email { font-size: 11px; color: #999; margin-top: 1px; }
+
+    .empty-state { padding: 28px; text-align: center; color: #aaa; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+  <div id="dispositif-banner">
+    <h2 id="disp-nom">Aucun dispositif sélectionné</h2>
+    <p  id="disp-info">Sélectionnez un dispositif dans la vue principale</p>
+  </div>
+
+  <div id="status-msg"></div>
+
+  <div class="school-selector">
+    <label for="school-select">École :</label>
+    <select id="school-select" onchange="onSchoolChange()">
+      <option value="">-- Choisir une école --</option>
+    </select>
+  </div>
+
+  <div class="teacher-list" id="teacher-list">
+    <div class="empty-state">Choisissez une école pour afficher les enseignants</div>
+  </div>
+
+  <script>
+    let currentDispositif = null;
+    let allEnseignants    = {};
+    let allEnd            = {};
+    let selectedSchool    = '';
+
+    // Convertir données Grist (colonnes) en tableau de lignes
+    function toRows(data) {
+      const ids  = data.id;
+      const cols = Object.keys(data).filter(k => k !== 'id' && k !== 'manualSort');
+      return ids.map((id, i) => {
+        const row = { id };
+        cols.forEach(c => { row[c] = data[c][i]; });
+        return row;
+      });
+    }
+
+    async function loadData() {
+      try {
+        const [ensData, endData] = await Promise.all([
+          grist.docApi.fetchTable('Enseignants'),
+          grist.docApi.fetchTable('Enseignants_Dispositifs')
+        ]);
+        const ensRows = toRows(ensData);
+        const endRows = toRows(endData);
+
+        allEnseignants = {};
+        ensRows.forEach(r => allEnseignants[r.id] = r);
+
+        allEnd = {};
+        endRows.forEach(r => allEnd[r.id] = r);
+
+        populateSchools(ensRows);
+        renderTeachers();
+      } catch(e) {
+        console.error('loadData error:', e);
+      }
+    }
+
+    function populateSchools(rows) {
+      const sel  = document.getElementById('school-select');
+      const prev = sel.value;
+      const schools = [...new Set(
+        rows.map(r => String(r.Ecole_rattachement || '')).filter(s => s && isNaN(Number(s)))
+      )].sort();
+
+      sel.innerHTML = '<option value="">-- Choisir une école --</option>';
+      schools.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s; o.textContent = s;
+        if (s === prev) o.selected = true;
+        sel.appendChild(o);
+      });
+    }
+
+    function getTeachers() {
+      return Object.values(allEnseignants)
+        .filter(e => String(e.Ecole_rattachement || '') === selectedSchool)
+        .sort((a, b) => (a.Nom_Prenom || '').localeCompare(b.Nom_Prenom || ''));
+    }
+
+    function getEnrolledIds() {
+      if (!currentDispositif) return new Set();
+      return new Set(
+        Object.values(allEnd)
+          .filter(r => r.Dispositif === currentDispositif.id)
+          .map(r => r.Enseignant)
+      );
+    }
+
+    function getEndRowId(teacherId) {
+      if (!currentDispositif) return null;
+      const r = Object.values(allEnd).find(
+        r => r.Enseignant === teacherId && r.Dispositif === currentDispositif.id
+      );
+      return r ? r.id : null;
+    }
+
+    function renderTeachers() {
+      const list = document.getElementById('teacher-list');
+      if (!selectedSchool) {
+        list.innerHTML = '<div class="empty-state">Choisissez une école pour afficher les enseignants</div>';
+        return;
+      }
+      const teachers    = getTeachers();
+      const enrolledIds = getEnrolledIds();
+      const nbInscrits  = teachers.filter(t => enrolledIds.has(t.id)).length;
+
+      if (teachers.length === 0) {
+        list.innerHTML = '<div class="empty-state">Aucun enseignant trouvé pour cette école</div>';
+        return;
+      }
+
+      let html = `
+        <div class="list-header">
+          <span>${teachers.length} enseignant(s) &nbsp;<span class="badge">${nbInscrits} inscrit(s)</span></span>
+          <button class="btn-all" onclick="inscrireTous()">Inscrire tous</button>
+        </div>`;
+
+      teachers.forEach(t => {
+        const checked = enrolledIds.has(t.id) ? 'checked' : '';
+        const disabled = !currentDispositif ? 'disabled' : '';
+        const nom   = t.Nom_Prenom || 'Sans nom';
+        const email = t.Email || t.Adresse_mail || '';
+        html += `
+          <div class="teacher-item">
+            <input type="checkbox" ${checked} ${disabled}
+              onchange="onCheck(${t.id}, this.checked)" />
+            <div>
+              <div class="teacher-name">${nom}</div>
+              ${email ? `<div class="teacher-email">${email}</div>` : ''}
+            </div>
+          </div>`;
+      });
+
+      list.innerHTML = html;
+    }
+
+    async function onCheck(teacherId, checked) {
+      if (!currentDispositif) return;
+      try {
+        if (checked) {
+          await grist.docApi.applyUserActions([[
+            'AddRecord', 'Enseignants_Dispositifs', null,
+            { Enseignant: teacherId, Dispositif: currentDispositif.id, Inscrit: true }
+          ]]);
+        } else {
+          const rowId = getEndRowId(teacherId);
+          if (rowId) {
+            await grist.docApi.applyUserActions([['RemoveRecord', 'Enseignants_Dispositifs', rowId]]);
+          }
+        }
+        await loadData();
+        showStatus('Modification enregistrée ✓', 'success');
+      } catch(e) {
+        console.error(e);
+        showStatus('Erreur lors de la modification', 'error');
+        await loadData();
+      }
+    }
+
+    async function inscrireTous() {
+      if (!currentDispositif || !selectedSchool) return;
+      const teachers    = getTeachers();
+      const enrolledIds = getEnrolledIds();
+      const toAdd       = teachers.filter(t => !enrolledIds.has(t.id));
+      if (toAdd.length === 0) { showStatus('Tous déjà inscrits ✓', 'success'); return; }
+      try {
+        await grist.docApi.applyUserActions(
+          toAdd.map(t => ['AddRecord', 'Enseignants_Dispositifs', null,
+            { Enseignant: t.id, Dispositif: currentDispositif.id, Inscrit: true }])
+        );
+        await loadData();
+        showStatus(`${toAdd.length} enseignant(s) inscrit(s) ✓`, 'success');
+      } catch(e) {
+        console.error(e);
+        showStatus('Erreur lors de l\'inscription en masse', 'error');
+      }
+    }
+
+    function showStatus(msg, type) {
+      const el = document.getElementById('status-msg');
+      el.textContent = msg;
+      el.className = type;
+      el.style.display = 'block';
+      setTimeout(() => { el.style.display = 'none'; }, 3000);
+    }
+
+    function onSchoolChange() {
+      selectedSchool = document.getElementById('school-select').value;
+      renderTeachers();
+    }
+
+    // Init Grist
+    grist.ready({ requiredAccess: 'full' });
+
+    grist.onRecord(record => {
+      currentDispositif = record;
+      document.getElementById('disp-nom').textContent  = record.Nom || 'Dispositif sans nom';
+      document.getElementById('disp-info').textContent =
+        (record.Annee_scolaire || '') + (record.Type_formation ? ' — ' + record.Type_formation : '');
+      renderTeachers();
+    });
+
+    loadData();
+    setInterval(loadData, 15000);
+  </script>
+</body>
+</html>

@@ -92,6 +92,7 @@
     let currentDispositif = null;
     let allEnseignants    = {};
     let allEnd            = {};
+    let allEcoles         = {}; // Pour mapper Nom_raccourci → Denomination
     let selectedSchool    = '';
 
     // Convertir données Grist (colonnes) en tableau de lignes
@@ -107,12 +108,14 @@
 
     async function loadData() {
       try {
-        const [ensData, endData] = await Promise.all([
+        const [ensData, endData, ecolesData] = await Promise.all([
           grist.docApi.fetchTable('Enseignants'),
-          grist.docApi.fetchTable('Enseignants_Dispositifs')
+          grist.docApi.fetchTable('Enseignants_Dispositifs'),
+          grist.docApi.fetchTable('Écoles') // Charger les écoles pour les noms complets
         ]);
         const ensRows = toRows(ensData);
         const endRows = toRows(endData);
+        const ecolesRows = toRows(ecolesData);
 
         allEnseignants = {};
         ensRows.forEach(r => allEnseignants[r.id] = r);
@@ -120,24 +123,39 @@
         allEnd = {};
         endRows.forEach(r => allEnd[r.id] = r);
 
+        // Créer un mapping Nom_raccourci → Denomination
+        allEcoles = {};
+        ecolesRows.forEach(r => {
+          if (r.Nom_raccourci) {
+            allEcoles[r.Nom_raccourci] = r.Denomination;
+          }
+        });
+
         populateSchools(ensRows);
         renderTeachers();
       } catch(e) {
         console.error('loadData error:', e);
+        showStatus('Erreur de chargement des données', 'error');
       }
     }
 
     function populateSchools(rows) {
-      const sel  = document.getElementById('school-select');
+      const sel = document.getElementById('school-select');
       const prev = sel.value;
-      const schools = [...new Set(
-        rows.map(r => String(r.Ecole_rattachement || '')).filter(s => s && isNaN(Number(s)))
+
+      // Récupérer les noms raccourcis uniques depuis les enseignants
+      const schoolShortNames = [...new Set(
+        rows.map(r => String(r.Ecole_rattachement || ''))
+          .filter(s => s && allEcoles[s]) // Filtrer uniquement les noms raccourcis valides
       )].sort();
 
       sel.innerHTML = '<option value="">-- Choisir une école --</option>';
-      schools.forEach(s => {
+
+      // Remplir la liste déroulante avec les noms complets
+      schoolShortNames.forEach(s => {
         const o = document.createElement('option');
-        o.value = s; o.textContent = s;
+        o.value = s; // Valeur = Nom_raccourci
+        o.textContent = allEcoles[s] || s; // Afficher le nom complet
         if (s === prev) o.selected = true;
         sel.appendChild(o);
       });
@@ -145,7 +163,7 @@
 
     function getTeachers() {
       return Object.values(allEnseignants)
-        .filter(e => String(e.Ecole_rattachement || '') === selectedSchool)
+        .filter(e => String(e.Ecole_rattachement || '') === selectedSchool) // Filtrer par Nom_raccourci
         .sort((a, b) => (a.Nom_Prenom || '').localeCompare(b.Nom_Prenom || ''));
     }
 
@@ -238,7 +256,8 @@
       try {
         await grist.docApi.applyUserActions(
           toAdd.map(t => ['AddRecord', 'Enseignants_Dispositifs', null,
-            { Enseignant: t.id, Dispositif: currentDispositif.id, Inscrit: true }])
+            { Enseignant: t.id, Dispositif: currentDispositif.id, Inscrit: true }
+          ])
         );
         await loadData();
         showStatus(`${toAdd.length} enseignant(s) inscrit(s) ✓`, 'success');
@@ -257,11 +276,11 @@
     }
 
     function onSchoolChange() {
-      selectedSchool = document.getElementById('school-select').value;
+      selectedSchool = document.getElementById('school-select').value; // Stocke le Nom_raccourci
       renderTeachers();
     }
 
-    // Init Grist
+    // Initialisation Grist
     grist.ready({ requiredAccess: 'full' });
 
     grist.onRecord(record => {

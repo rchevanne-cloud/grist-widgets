@@ -111,19 +111,25 @@
       return typeof v === 'number' || (typeof v === 'string' && /^\d+$/.test(v) && v !== '');
     }
 
+    // Une référence vide dans Grist vaut 0 — on la traite comme "pas d'école"
+    function isEmptyRef(v) {
+      return isRefValue(v) && Number(v) === 0;
+    }
+
     // Retourne le nom affichable d'une école, que ce soit une réf ou du texte
     function schoolLabel(v) {
-      if (v === null || v === undefined || v === '') return '';
+      if (v === null || v === undefined || v === '' || isEmptyRef(v)) return '';
       if (isRefValue(v)) {
         const eco = allEcoles[Number(v)];
-        return eco ? (eco.Nom_raccourci || eco.Denomination || ('École #' + v)) : ('École #' + v);
+        return eco ? (eco.Nom_raccourci || eco.Denomination || '') : '';
       }
       return String(v);
     }
 
-    // Clé de comparaison stable (id si réf, texte sinon)
+    // Clé de comparaison stable (id si réf, texte sinon) — vide si pas d'école réelle
     function schoolKey(v) {
-      if (v === null || v === undefined || v === '') return '';
+      if (v === null || v === undefined || v === '' || isEmptyRef(v)) return '';
+      if (isRefValue(v) && !allEcoles[Number(v)]) return ''; // référence cassée → ignorée
       return isRefValue(v) ? String(Number(v)) : String(v);
     }
 
